@@ -1,0 +1,25 @@
+{
+  "name": "syncav",
+  "version": "0.0.1",
+  "main": "dist/main.js",
+  "files": [
+    "dist/**"
+  ],
+  "repository": "https://github.com/wilsonzlin/SyncAV",
+  "author": "Wilson Lin <npm@wilsonl.in>",
+  "license": "ISC",
+  "scripts": {
+    "build": "npm run clean && tsc",
+    "clean": "rm -rf dist",
+    "format": "prettier --write 'src/**/*.ts'",
+    "prepublishOnly": "prettier --check 'src/**/*.ts' && npm run build"
+  },
+  "dependencies": {
+    "extlib": "^0.16.1"
+  },
+  "devDependencies": {
+    "@types/node": "^15.12.5",
+    "prettier": "^2.3.2",
+    "typescript": "^4.3.4"
+  }
+}
