@@ -34,7 +34,10 @@ export class SyncAV {
     // Other than media keys, the only way to determine when the above occur is through `play` and `pause` events, which can't be distinguished from:
     // - User initiated.
     // - Programmatic app logic (sync audio + video, pause while debounced seek).
-    const sync = () => {
+    const sync = (e: Event) => {
+      console.debug(
+        `[SyncAV] Sync triggered due to event ${e.type} on ${e.target?.constructor.name}`
+      );
       if (!this.secondaryLoaded) {
         return;
       }
@@ -48,14 +51,17 @@ export class SyncAV {
       }
     };
 
-    primary.addEventListener("canplay", sync);
-    primary.addEventListener("canplaythrough", sync);
-    primary.addEventListener("pause", sync);
-    primary.addEventListener("suspend", sync);
-    secondary.addEventListener("canplay", sync);
-    secondary.addEventListener("canplaythrough", sync);
-    secondary.addEventListener("pause", sync);
-    secondary.addEventListener("suspend", sync);
+    for (const e of [
+      "canplay",
+      "canplaythrough",
+      "pause",
+      "stalled",
+      "suspend",
+      "waiting",
+    ]) {
+      primary.addEventListener(e, sync);
+      secondary.addEventListener(e, sync);
+    }
 
     primary.addEventListener("durationchange", () =>
       this.callEventListeners("timechange")
@@ -137,9 +143,7 @@ export class SyncAV {
     if (this.primaryLoaded) {
       this.primary.currentTime = timestamp;
     }
-    if (this.secondaryLoaded) {
-      this.secondary.currentTime = timestamp;
-    }
+    // This will set this.secondary.currentTime.
     this.playIfNotUserPaused();
   }
 
@@ -183,6 +187,7 @@ export class SyncAV {
     // userPaused should always be set even if no source loaded; this way, when
     // source loads, it starts playing automatically.
     this.userPaused = false;
+    this.syncCurrentTime();
     this.primary.play();
     this.secondary.play();
     this.callEventListeners("playbackchange");
@@ -240,6 +245,18 @@ export class SyncAV {
     this.eventListeners
       .computeIfAbsent(type, () => new Set())
       .forEach((l) => l());
+  }
+
+  private syncCurrentTime() {
+    // Extra check to ensure times are aligned.
+    // NOTE: It might trigger sync => addPauseReason => sync => removePauseReason loop again.
+    if (this.secondaryLoaded) {
+      console.debug(
+        "[SyncAV] Synchronising currentTime to",
+        this.primary.currentTime
+      );
+      this.secondary.currentTime = this.primary.currentTime;
+    }
   }
 }
 
