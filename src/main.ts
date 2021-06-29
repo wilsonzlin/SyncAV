@@ -242,3 +242,7 @@ export class SyncAV {
       .forEach((l) => l());
   }
 }
+
+if (typeof window == "object") {
+  (window as any).SyncAV = SyncAV;
+}
