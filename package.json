@@ -17,7 +17,7 @@
     "prepublishOnly": "prettier --check 'src/**/*.ts' && npm run build"
   },
   "dependencies": {
-    "extlib": "^0.16.1"
+    "@xtjs/lib": "^0.34.9"
   },
   "devDependencies": {
     "@types/node": "^15.12.5",

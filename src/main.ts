@@ -1,5 +1,6 @@
-import assertState from "extlib/js/assertState";
-import Dict from "extlib/js/Dict";
+import assertState from "@xtjs/lib/js/assertState";
+import asyncTimeout from "@xtjs/lib/js/asyncTimeout";
+import Dict from "@xtjs/lib/js/Dict";
 
 type EventName =
   | "durationchange"
@@ -9,73 +10,154 @@ type EventName =
   | "seekchange"
   | "timeupdate"
   | "volumechange";
-type PauseReason = "userSeeking" | "syncing";
 
 // This implementation is prone to infinite loops, due to the fact that we don't have full control: the system, browser, and user can do things that we can only react to. To prevent, ensure there are no tug-of-wars:
 // - Feel free to pause whenever and without checking, but don't play without checking state.
 //   - Setting currentTime or calling play() always emits events that may trigger a sync, which may update currentTime and/or call play().
 // - Having the secondary always react to the primary would be great, but that would leave open the chance of secondary being out-of-sync from external triggers.
 // - Events don't occur immediately. play() and pause() don't occur immediately. Be aware of accidental interleaving loops.
+// - We can never be certain where a "paused" event comes from, since events are asynchronous (i.e. could come anytime) and "paused" is emitted when we call .pause(), when the system pauses, when the browser pauses, etc. Sometimes they don't emit if play() is caused quickly after pause() etc.
+// - Not all timestamp values can be set (e.g. frametimes, sampling rates), so don't wait for primary and secondary currentTime values to match exactly.
+// We used to use multiple separate event-driven sync functions. This became unwieldy and caused infinite loops. Now we use a single "reconcile" function, such that any external events all trigger a single-instance function that continuously runs until the current state matches the desired state. This is much more reliable due to its simplicity; however, it's still possible for it to cause infinite loops, so be vigilant.
 export class SyncAV {
   private readonly primary: HTMLVideoElement = document.createElement("video");
-  private readonly eventListeners = new Dict<string, Set<() => void>>();
   private readonly secondary: HTMLAudioElement =
     document.createElement("audio");
-  private readonly pauseReasons = new Set<PauseReason>();
   private primaryLoaded: boolean = false;
   private secondaryLoaded: boolean = false;
+  private readonly eventListeners = new Dict<string, Set<() => void>>();
   private userPaused: boolean = true;
+  // We implement this to allow consumer of this class to pause video while seeking without showing paused state, which is a common UI design.
+  private userSeeking: boolean = false;
+  private reconciling = false;
+  private expectingPrimaryPause = false;
+  private expectingSecondaryPause = false;
+
+  private reconcile = async () => {
+    if (this.reconciling) {
+      return;
+    }
+    if (!this.secondaryLoaded) {
+      return;
+    }
+    this.reconciling = true;
+    const { primary, secondary } = this;
+    const pauseExpectedly = () => {
+      let altered = false;
+      if (!primary.paused) {
+        console.debug("[SyncAV] Primary is not paused, expectedly pausing...");
+        this.expectingPrimaryPause = true;
+        primary.pause();
+        altered = true;
+      }
+      if (!secondary.paused) {
+        console.debug(
+          "[SyncAV] Secondary is not paused, expectedly pausing..."
+        );
+        this.expectingSecondaryPause = true;
+        secondary.pause();
+        altered = true;
+      }
+      return altered;
+    };
+    const syncCurrentTime = () => {
+      if (
+        this.secondaryLoaded &&
+        Math.abs(this.primary.currentTime - this.secondary.currentTime) > 0.05
+      ) {
+        console.debug(
+          "[SyncAV] Synchronising currentTime to",
+          this.primary.currentTime
+        );
+        this.secondary.currentTime = this.primary.currentTime;
+        return true;
+      }
+      return false;
+    };
+    for (; ; await asyncTimeout(50)) {
+      if (this.userPaused || this.userSeeking) {
+        // If a stream wasn't paused and is pause(), check again in another iteration.
+        if (!pauseExpectedly()) {
+          break;
+        }
+      } else {
+        if (
+          primary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA ||
+          secondary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
+        ) {
+          console.debug(
+            "[SyncAV] Not ready:",
+            primary.readyState,
+            secondary.readyState
+          );
+          pauseExpectedly();
+          continue;
+        }
+        if (syncCurrentTime()) {
+          continue;
+        }
+        let altered = false;
+        if (this.primary.paused) {
+          console.debug("[SyncAV] Primary is paused, expectedly playing...");
+          // Cancel any expected pause.
+          this.expectingPrimaryPause = false;
+          this.primary.play();
+          altered = true;
+        }
+        if (this.secondary.paused) {
+          console.debug("[SyncAV] Secondary is paused, expectedly playing...");
+          // Cancel any expected pause.
+          this.expectingSecondaryPause = false;
+          this.secondary.play();
+          altered = true;
+        }
+        if (!altered) {
+          break;
+        }
+      }
+    }
+    this.reconciling = false;
+  };
 
   constructor() {
     const { primary, secondary } = this;
 
-    const syncLoad = (e: Event) => {
-      console.debug(
-        `[SyncAV] Sync LOAD triggered due to event ${e.type} on ${e.target?.constructor.name}`
-      );
-      if (!this.secondaryLoaded) {
-        return;
-      }
-      if (
-        primary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA ||
-        secondary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
-      ) {
-        console.debug(
-          "[SyncAV] Not ready:",
-          primary.readyState,
-          secondary.readyState
-        );
-        this.addPauseReason("syncing");
-      } else {
-        this.removePauseReason("syncing");
-      }
-    };
-
     for (const e of ["canplay", "canplaythrough", "stalled", "waiting"]) {
-      primary.addEventListener(e, syncLoad);
-      secondary.addEventListener(e, syncLoad);
+      primary.addEventListener(e, this.reconcile);
+      secondary.addEventListener(e, this.reconcile);
     }
 
     // Handle external triggers of pausing on either stream.
-    const syncPause = (e: Event) => {
-      console.debug(
-        `[SyncAV] Sync PAUSE triggered due to event ${e.type} on ${e.target?.constructor.name}`
-      );
-      primary.pause();
-      secondary.pause();
-    };
-    primary.addEventListener("pause", syncPause);
-    secondary.addEventListener("pause", syncPause);
+    primary.addEventListener("pause", () => {
+      if (this.expectingPrimaryPause) {
+        this.expectingPrimaryPause = false;
+      } else {
+        console.debug(`[SyncAV] Pause triggered from primary`);
+        this.pause();
+      }
+    });
+    secondary.addEventListener("pause", () => {
+      if (this.expectingSecondaryPause) {
+        this.expectingSecondaryPause = false;
+      } else {
+        console.debug(`[SyncAV] Pause triggered from secondary`);
+        this.pause();
+      }
+    });
 
-    // NOTE: We don't call this.pause on pause, as that indicates user pausing, and pausing could be done by us instead. However, if media starts playing, then the user pause state must be overriden, as otherwise it would indicate it's paused but it's actually not.
-    const syncPlay = (e: Event) => {
-      console.debug(
-        `[SyncAV] Sync PLAY triggered due to event ${e.type} on ${e.target?.constructor.name}`
-      );
+    // Handle external triggers of playing on either stream.
+    primary.addEventListener("play", () => {
+      console.debug(`[SyncAV] Play triggered from primary`);
+      // It's already playing, so any expected pause will not happen (unless there's some extremely rare race condition due to async out-of-order events).
+      this.expectingPrimaryPause = false;
       this.play();
-    };
-    primary.addEventListener("play", syncPlay);
-    secondary.addEventListener("play", syncPlay);
+    });
+    secondary.addEventListener("play", () => {
+      console.debug(`[SyncAV] Play triggered from secondary`);
+      // It's already playing, so any expected pause will not happen (unless there's some extremely rare race condition due to async out-of-order events).
+      this.expectingSecondaryPause = false;
+      this.play();
+    });
 
     primary.addEventListener("durationchange", () =>
       this.callEventListeners("durationchange")
@@ -102,7 +184,7 @@ export class SyncAV {
       this.callEventListeners("seekchange")
     );
     primary.addEventListener("timeupdate", () => {
-      if (!this.pauseReasons.has("userSeeking")) {
+      if (!this.userSeeking) {
         this.callEventListeners("timeupdate");
       }
     });
@@ -158,7 +240,7 @@ export class SyncAV {
       this.primary.currentTime = timestamp;
     }
     // This will set this.secondary.currentTime.
-    this.playIfNotUserPaused();
+    this.reconcile();
   }
 
   set muted(muted: boolean) {
@@ -172,11 +254,13 @@ export class SyncAV {
   }
 
   startUserSeeking() {
-    this.addPauseReason("userSeeking");
+    this.userSeeking = true;
+    this.reconcile();
   }
 
   endUserSeeking() {
-    this.removePauseReason("userSeeking");
+    this.userSeeking = false;
+    this.reconcile();
   }
 
   off(type: EventName, listener: () => void) {
@@ -203,8 +287,7 @@ export class SyncAV {
   pause() {
     const willChange = this.userPaused !== true;
     this.userPaused = true;
-    this.primary.pause();
-    this.secondary.pause();
+    this.reconcile();
     if (willChange) this.callEventListeners("playbackchange");
   }
 
@@ -213,10 +296,7 @@ export class SyncAV {
     // source loads, it starts playing automatically.
     const willChange = this.userPaused !== false;
     this.userPaused = false;
-    this.syncCurrentTime();
-    this.pauseReasons.clear();
-    if (this.primary.paused) this.primary.play();
-    if (this.secondary.paused) this.secondary.play();
+    this.reconcile();
     if (willChange) this.callEventListeners("playbackchange");
   }
 
@@ -241,48 +321,10 @@ export class SyncAV {
     this.secondaryLoaded = !!secondary;
   }
 
-  private playIfNotUserPaused() {
-    if (!this.userPaused) {
-      this.play();
-    }
-  }
-
-  private addPauseReason(reason: PauseReason) {
-    this.pauseReasons.add(reason);
-    this.primary.pause();
-    this.secondary.pause();
-  }
-
-  private removePauseReason(reason: PauseReason) {
-    // Only call this.playIfNotUserPaused if pauseReasons was actually changed,
-    // as otherwise an infinite loop might occur: play() => canplay => syncLoad() => removePauseReason() => play() => [loop].
-    if (this.pauseReasons.delete(reason)) {
-      if (!this.pauseReasons.size) {
-        this.playIfNotUserPaused();
-      }
-    }
-  }
-
   private callEventListeners(type: EventName) {
-    console.debug("[SyncAV] Emitting", type);
     this.eventListeners
       .computeIfAbsent(type, () => new Set())
       .forEach((l) => l());
-  }
-
-  private syncCurrentTime() {
-    // Extra check to ensure times are aligned.
-    // NOTE: It might trigger sync => addPauseReason => sync => removePauseReason loop again.
-    if (
-      this.secondaryLoaded &&
-      Math.abs(this.primary.currentTime - this.secondary.currentTime) > 0.05
-    ) {
-      console.debug(
-        "[SyncAV] Synchronising currentTime to",
-        this.primary.currentTime
-      );
-      this.secondary.currentTime = this.primary.currentTime;
-    }
   }
 }
 
