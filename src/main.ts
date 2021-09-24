@@ -24,14 +24,6 @@ export class SyncAV {
   constructor() {
     const { primary, secondary } = this;
 
-    // TODO WARNING External triggers of pause and play must be handled by consumer of this class.
-    // External events include:
-    // - Media keys.
-    // - System GUI controls (e.g. notification playback controls).
-    // - System interception (e.g. Android audio focus (see https://developer.android.com/guide/topics/media-apps/audio-focus)).
-    // Other than media keys, the only way to determine when the above occur is through `play` and `pause` events, which can't be distinguished from:
-    // - User initiated.
-    // - Programmatic app logic (sync audio + video, pause while debounced seek).
     const sync = (e: Event) => {
       console.debug(
         `[SyncAV] Sync triggered due to event ${e.type} on ${e.target?.constructor.name}`
@@ -60,6 +52,14 @@ export class SyncAV {
       primary.addEventListener(e, sync);
       secondary.addEventListener(e, sync);
     }
+
+    // Handle external triggers of pausing on either stream.
+    primary.addEventListener("pause", () => secondary.pause());
+    secondary.addEventListener("pause", () => primary.pause());
+
+    // NOTE: We don't call this.pause on pause, as that indicates user pausing, and pausing could be done by us instead. However, if media starts playing, then the user pause state must be overriden, as otherwise it would indicate it's paused but it's actually not.
+    primary.addEventListener("play", () => this.play());
+    secondary.addEventListener("play", () => this.play());
 
     primary.addEventListener("durationchange", () =>
       this.callEventListeners("durationchange")
@@ -185,20 +185,23 @@ export class SyncAV {
   }
 
   pause() {
+    const willChange = this.userPaused !== true;
     this.userPaused = true;
     this.primary.pause();
     this.secondary.pause();
-    this.callEventListeners("playbackchange");
+    if (willChange) this.callEventListeners("playbackchange");
   }
 
   play() {
     // userPaused should always be set even if no source loaded; this way, when
     // source loads, it starts playing automatically.
+    const willChange = this.userPaused !== false;
     this.userPaused = false;
     this.syncCurrentTime();
+    this.pauseReasons.clear();
     this.primary.play();
     this.secondary.play();
-    this.callEventListeners("playbackchange");
+    if (willChange) this.callEventListeners("playbackchange");
   }
 
   setSource(
@@ -224,8 +227,7 @@ export class SyncAV {
 
   private playIfNotUserPaused() {
     if (!this.userPaused) {
-      this.primary.play();
-      this.secondary.play();
+      this.play();
     }
   }
 
