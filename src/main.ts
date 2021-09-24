@@ -46,7 +46,7 @@ export class SyncAV {
       "canplaythrough",
       // Do not react to "pause" event, as it might never resolve and update readyState.
       "stalled",
-      "suspend",
+      // Do not react to "suspend" event, as it might cause an infinite loop from pause() => suspend => canplay => sync() => pause() => suspend => ...; stalled and waiting should be enough to capture buffering.
       "waiting",
     ]) {
       primary.addEventListener(e, sync);
