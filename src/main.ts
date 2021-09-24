@@ -37,9 +37,6 @@ export class SyncAV {
     if (this.reconciling) {
       return;
     }
-    if (!this.secondaryLoaded) {
-      return;
-    }
     this.reconciling = true;
     const { primary, secondary } = this;
     const pauseExpectedly = () => {
@@ -50,7 +47,7 @@ export class SyncAV {
         primary.pause();
         altered = true;
       }
-      if (!secondary.paused) {
+      if (this.secondaryLoaded && !secondary.paused) {
         console.debug(
           "[SyncAV] Secondary is not paused, expectedly pausing..."
         );
@@ -90,7 +87,7 @@ export class SyncAV {
         }
         if (
           primary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA ||
-          secondary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
+          this.secondaryLoaded && secondary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
         ) {
           console.debug(
             "[SyncAV] Not ready:",
@@ -108,7 +105,7 @@ export class SyncAV {
           this.primary.play();
           altered = true;
         }
-        if (this.secondary.paused) {
+        if (this.secondaryLoaded && this.secondary.paused) {
           console.debug("[SyncAV] Secondary is paused, expectedly playing...");
           // Cancel any expected pause.
           this.expectingSecondaryPause = false;
