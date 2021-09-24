@@ -81,6 +81,13 @@ export class SyncAV {
           break;
         }
       } else {
+        if (primary.ended) {
+          // We've ended, and we desire to play, so we need to restart (otherwise, we'll wait for readyState forever).
+          primary.currentTime = 0;
+        }
+        if (syncCurrentTime()) {
+          continue;
+        }
         if (
           primary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA ||
           secondary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
@@ -91,9 +98,6 @@ export class SyncAV {
             secondary.readyState
           );
           pauseExpectedly();
-          continue;
-        }
-        if (syncCurrentTime()) {
           continue;
         }
         let altered = false;
