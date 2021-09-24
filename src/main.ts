@@ -87,7 +87,8 @@ export class SyncAV {
         }
         if (
           primary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA ||
-          this.secondaryLoaded && secondary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
+          (this.secondaryLoaded &&
+            secondary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA)
         ) {
           console.debug(
             "[SyncAV] Not ready:",
