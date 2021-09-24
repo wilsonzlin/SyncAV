@@ -9,6 +9,7 @@
     "isolatedModules": true,
     "lib": ["ESNext", "DOM"],
     "module": "CommonJS",
+    "moduleResolution": "node",
     "noErrorTruncation": true,
     "noFallthroughCasesInSwitch": true,
     "noImplicitAny": true,
@@ -23,6 +24,6 @@
     "strictFunctionTypes": true,
     "strictNullChecks": true,
     "strictPropertyInitialization": true,
-    "target": "ES6"
+    "target": "ESNext"
   }
 }

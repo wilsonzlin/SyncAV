@@ -2,10 +2,12 @@ import assertState from "extlib/js/assertState";
 import Dict from "extlib/js/Dict";
 
 type EventName =
+  | "durationchange"
+  | "error"
   | "loadedmetadata"
   | "playbackchange"
   | "seekchange"
-  | "timechange"
+  | "timeupdate"
   | "volumechange";
 type PauseReason = "userSeeking" | "syncing";
 
@@ -19,11 +21,7 @@ export class SyncAV {
   private secondaryLoaded: boolean = false;
   private userPaused: boolean = true;
 
-  constructor({
-    fullSize = false,
-  }: {
-    fullSize?: boolean;
-  } = {}) {
+  constructor() {
     const { primary, secondary } = this;
 
     // TODO WARNING External triggers of pause and play must be handled by consumer of this class.
@@ -64,7 +62,7 @@ export class SyncAV {
     }
 
     primary.addEventListener("durationchange", () =>
-      this.callEventListeners("timechange")
+      this.callEventListeners("durationchange")
     );
     primary.addEventListener("ended", () => {
       this.userPaused = true;
@@ -89,22 +87,18 @@ export class SyncAV {
     );
     primary.addEventListener("timeupdate", () => {
       if (!this.pauseReasons.has("userSeeking")) {
-        this.callEventListeners("timechange");
+        this.callEventListeners("timeupdate");
       }
     });
     primary.addEventListener("volumechange", () =>
       this.callEventListeners("volumechange")
     );
+    primary.addEventListener("error", () => this.callEventListeners("error"));
+    secondary.addEventListener("error", () => this.callEventListeners("error"));
 
     this.primary.autoplay = false;
     this.secondary.autoplay = false;
     this.primary.controls = false;
-    if (fullSize) {
-      this.primary.style.backgroundColor = "#000";
-      this.primary.style.width = "100%";
-      this.primary.style.height = "100%";
-      this.primary.style.objectFit = "contain";
-    }
   }
 
   get currentTime() {
@@ -123,6 +117,10 @@ export class SyncAV {
     return this.primary.ended;
   }
 
+  get error() {
+    return this.primary.error ?? this.secondary.error;
+  }
+
   get muted() {
     return this.primary.muted;
   }
@@ -139,12 +137,22 @@ export class SyncAV {
     return this.primary.volume;
   }
 
-  seek(timestamp: number) {
+  set currentTime(timestamp: number) {
     if (this.primaryLoaded) {
       this.primary.currentTime = timestamp;
     }
     // This will set this.secondary.currentTime.
     this.playIfNotUserPaused();
+  }
+
+  set muted(muted: boolean) {
+    this.primary.muted = muted;
+    this.secondary.muted = muted;
+  }
+
+  set volume(volume: number) {
+    this.primary.volume = volume;
+    this.secondary.volume = volume;
   }
 
   startUserSeeking() {
@@ -193,9 +201,12 @@ export class SyncAV {
     this.callEventListeners("playbackchange");
   }
 
-  setSource(primary: string | undefined, secondary: string | undefined) {
+  setSource(
+    primary: string | null | undefined,
+    secondary: string | null | undefined
+  ) {
     assertState(!!primary || !secondary);
-    const setSrc = (elem: HTMLMediaElement, val: string | undefined) => {
+    const setSrc = (elem: HTMLMediaElement, val: string | null | undefined) => {
       if (val) {
         elem.src = val;
       } else {
@@ -209,16 +220,6 @@ export class SyncAV {
     this.primaryLoaded = !!primary;
     setSrc(this.secondary, secondary);
     this.secondaryLoaded = !!secondary;
-  }
-
-  setMuted(muted: boolean) {
-    this.primary.muted = muted;
-    this.secondary.muted = muted;
-  }
-
-  setVolume(volume: number) {
-    this.primary.volume = volume;
-    this.secondary.volume = volume;
   }
 
   private playIfNotUserPaused() {
