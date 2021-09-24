@@ -52,7 +52,7 @@ export class SyncAV {
     for (const e of [
       "canplay",
       "canplaythrough",
-      "pause",
+      // Do not react to "pause" event, as it might never resolve and update readyState.
       "stalled",
       "suspend",
       "waiting",
