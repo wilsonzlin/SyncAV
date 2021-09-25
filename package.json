@@ -1,7 +1,7 @@
 {
   "name": "syncav",
   "description": "Synchronise simultaneous playback of HTML video and audio",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "main": "dist/main.js",
   "files": [
     "dist/**"
