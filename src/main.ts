@@ -23,8 +23,6 @@ export class SyncAV {
   private readonly primary: HTMLVideoElement = document.createElement("video");
   private readonly secondary: HTMLAudioElement =
     document.createElement("audio");
-  private primaryLoaded: boolean = false;
-  private secondaryLoaded: boolean = false;
   private readonly eventListeners = new Dict<string, Set<() => void>>();
   private userPaused: boolean = true;
   // We implement this to allow consumer of this class to pause video while seeking without showing paused state, which is a common UI design.
@@ -32,6 +30,14 @@ export class SyncAV {
   private reconciling = false;
   private expectingPrimaryPause = false;
   private expectingSecondaryPause = false;
+
+  private get primaryLoaded() {
+    return !!this.primary.src;
+  }
+
+  private get secondaryLoaded() {
+    return !!this.secondary.src;
+  }
 
   private reconcile = async () => {
     if (this.reconciling) {
@@ -78,6 +84,11 @@ export class SyncAV {
           break;
         }
       } else {
+        if (!this.primaryLoaded) {
+          // There's nothing loaded; if we proceed, we'll be waiting forever because readyState will never change.
+          this.userPaused = true;
+          continue;
+        }
         if (primary.ended) {
           // We've ended, and we desire to play, so we need to restart (otherwise, we'll wait for readyState forever).
           primary.currentTime = 0;
@@ -310,6 +321,7 @@ export class SyncAV {
     primary: string | null | undefined,
     secondary: string | null | undefined
   ) {
+    console.debug("[SyncAV] Updating sources:", primary, secondary);
     assertState(!!primary || !secondary);
     const setSrc = (elem: HTMLMediaElement, val: string | null | undefined) => {
       if (val) {
@@ -324,9 +336,7 @@ export class SyncAV {
       }
     };
     setSrc(this.primary, primary);
-    this.primaryLoaded = !!primary;
     setSrc(this.secondary, secondary);
-    this.secondaryLoaded = !!secondary;
   }
 
   private callEventListeners(type: EventName) {
