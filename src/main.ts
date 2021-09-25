@@ -314,6 +314,8 @@ export class SyncAV {
     const setSrc = (elem: HTMLMediaElement, val: string | null | undefined) => {
       if (val) {
         elem.src = val;
+        // Sometimes, the browser doesn't automatically load, despite the preload setting, causing reconciler to stall forever on waiting for readyState to change.
+        elem.load();
       } else {
         // Chrome requires setting property to empty string.
         elem.src = "";
