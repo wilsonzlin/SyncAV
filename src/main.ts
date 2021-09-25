@@ -324,6 +324,7 @@ export class SyncAV {
   }
 
   private callEventListeners(type: EventName) {
+    console.debug("[SyncAV] Emitting", type);
     this.eventListeners
       .computeIfAbsent(type, () => new Set())
       .forEach((l) => l());
