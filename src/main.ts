@@ -186,7 +186,7 @@ export class SyncAV {
     primary.addEventListener("durationchange", () =>
       this.callEventListeners("durationchange")
     );
-    primary.addEventListener("ended", () => this.userPaused = true);
+    primary.addEventListener("ended", () => (this.userPaused = true));
     const maybeEmitLoadedMetadata = () => {
       if (
         !this.secondaryLoaded ||
