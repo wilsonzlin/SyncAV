@@ -85,6 +85,7 @@ export class SyncAV {
         if (syncCurrentTime()) {
           continue;
         }
+        // WARNING: `preload` must be "auto", as otherwise this could be HAVE_METADATA forever when changing sources.
         if (
           primary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA ||
           (this.secondaryLoaded &&
@@ -199,6 +200,9 @@ export class SyncAV {
     this.primary.autoplay = false;
     this.secondary.autoplay = false;
     this.primary.controls = false;
+    // This is needed in order for reconciler to work if sources are changed, as otherwise they could be stuck on HAVE_METADATA forever.
+    this.primary.preload = "auto";
+    this.secondary.preload = "auto";
   }
 
   get currentTime() {
