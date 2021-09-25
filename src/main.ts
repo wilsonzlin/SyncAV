@@ -24,12 +24,22 @@ export class SyncAV {
   private readonly secondary: HTMLAudioElement =
     document.createElement("audio");
   private readonly eventListeners = new Dict<string, Set<() => void>>();
-  private userPaused: boolean = true;
+  private _userPaused: boolean = true;
   // We implement this to allow consumer of this class to pause video while seeking without showing paused state, which is a common UI design.
   private userSeeking: boolean = false;
   private reconciling = false;
   private expectingPrimaryPause = false;
   private expectingSecondaryPause = false;
+
+  private get userPaused() {
+    return this._userPaused;
+  }
+
+  private set userPaused(newVal: boolean) {
+    const willChange = this.userPaused !== newVal;
+    this.userPaused = newVal;
+    if (willChange) this.callEventListeners("playbackchange");
+  }
 
   private get primaryLoaded() {
     return !!this.primary.src;
@@ -176,10 +186,7 @@ export class SyncAV {
     primary.addEventListener("durationchange", () =>
       this.callEventListeners("durationchange")
     );
-    primary.addEventListener("ended", () => {
-      this.userPaused = true;
-      this.callEventListeners("playbackchange");
-    });
+    primary.addEventListener("ended", () => this.userPaused = true);
     const maybeEmitLoadedMetadata = () => {
       if (
         !this.secondaryLoaded ||
@@ -302,19 +309,15 @@ export class SyncAV {
   }
 
   pause() {
-    const willChange = this.userPaused !== true;
     this.userPaused = true;
     this.reconcile();
-    if (willChange) this.callEventListeners("playbackchange");
   }
 
   play() {
     // userPaused should always be set even if no source loaded; this way, when
     // source loads, it starts playing automatically.
-    const willChange = this.userPaused !== false;
     this.userPaused = false;
     this.reconcile();
-    if (willChange) this.callEventListeners("playbackchange");
   }
 
   setSource(
