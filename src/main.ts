@@ -39,7 +39,7 @@ export class SyncAV {
 
   private set userPaused(newVal: boolean) {
     const willChange = this.userPaused !== newVal;
-    this.userPaused = newVal;
+    this._userPaused = newVal;
     if (willChange) this.callEventListeners("playbackchange");
   }
 
@@ -55,6 +55,7 @@ export class SyncAV {
     if (this.reconciling) {
       return;
     }
+    console.debug("[SyncAV] Reconciling...");
     this.reconciling = true;
     const { primary, secondary } = this;
     const pauseExpectedly = () => {
