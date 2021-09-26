@@ -11,6 +11,8 @@ type EventName =
   | "timeupdate"
   | "volumechange";
 
+const MAX_RECONCILE_ATTEMPTS = 20 * 120;
+
 // This implementation is prone to infinite loops, due to the fact that we don't have full control: the system, browser, and user can do things that we can only react to. To prevent, ensure there are no tug-of-wars:
 // - Feel free to pause whenever and without checking, but don't play without checking state.
 //   - Setting currentTime or calling play() always emits events that may trigger a sync, which may update currentTime and/or call play().
@@ -87,7 +89,15 @@ export class SyncAV {
       }
       return false;
     };
-    for (; ; await asyncTimeout(50)) {
+    let attempts = 0;
+    for (; attempts <= MAX_RECONCILE_ATTEMPTS; await asyncTimeout(50)) {
+      if (attempts == MAX_RECONCILE_ATTEMPTS) {
+        console.debug(
+          "[SyncAV] Reached maximum reconcile attempts, setting userPaused"
+        );
+        this.userPaused = true;
+        break;
+      }
       if (this.userPaused || this.userSeeking) {
         // If a stream wasn't paused and is pause(), check again in another iteration.
         if (!pauseExpectedly()) {
@@ -96,11 +106,15 @@ export class SyncAV {
       } else {
         if (!this.primaryLoaded) {
           // There's nothing loaded; if we proceed, we'll be waiting forever because readyState will never change.
+          console.debug(
+            "[SyncAV] No primary source loaded, setting userPaused"
+          );
           this.userPaused = true;
           continue;
         }
         if (primary.ended) {
           // We've ended, and we desire to play, so we need to restart (otherwise, we'll wait for readyState forever).
+          console.debug("[SyncAV] Primary ended, resetting currentTime");
           primary.currentTime = 0;
         }
         if (syncCurrentTime()) {
@@ -309,11 +323,13 @@ export class SyncAV {
   }
 
   pause() {
+    console.debug("[SyncAV] pause() called");
     this.userPaused = true;
     this.reconcile();
   }
 
   play() {
+    console.debug("[SyncAV] play() called");
     // userPaused should always be set even if no source loaded; this way, when
     // source loads, it starts playing automatically.
     this.userPaused = false;
