@@ -26,9 +26,9 @@ export class SyncAV {
   private readonly secondary: HTMLAudioElement =
     document.createElement("audio");
   private readonly eventListeners = new Dict<string, Set<() => void>>();
-  private _userPaused: boolean = true;
+  private _userPaused = true;
   // We implement this to allow consumer of this class to pause video while seeking without showing paused state, which is a common UI design.
-  private userSeeking: boolean = false;
+  private userSeeking = false;
   private reconciling = false;
   private expectingPrimaryPause = false;
   private expectingSecondaryPause = false;
