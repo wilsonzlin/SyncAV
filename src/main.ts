@@ -12,7 +12,9 @@ type EventName =
   | "timeupdate"
   | "volumechange";
 
-const MAX_RECONCILE_ATTEMPTS = 20 * 120;
+// Up to 30 seconds.
+// TODO Is this necessary? Is this fair for slower connections?
+const MAX_RECONCILE_ATTEMPTS = 10 * 30;
 
 export enum ReconciliationState {
   IDLE,
@@ -39,6 +41,8 @@ export class SyncAV {
   private _reconciliationState = ReconciliationState.IDLE;
   private expectingPrimaryPause = false;
   private expectingSecondaryPause = false;
+  // We need this in case a load() is required during reconciliation, which resets the currentTime to zero.
+  private goalCurrentTime: number | undefined;
 
   private get userPaused() {
     return this._userPaused;
@@ -68,6 +72,7 @@ export class SyncAV {
     return !!this.secondary.src;
   }
 
+  // TODO Stop on errors, but not expected errors caused while reconciling (e.g. aborted playback due to expected pause).
   private reconcile = async () => {
     if (this.reconciliationState === ReconciliationState.RUNNING) {
       return;
@@ -94,6 +99,10 @@ export class SyncAV {
       return altered;
     };
     const syncCurrentTime = () => {
+      // TODO Should we check readyState? Is it possible that seeking will throw an exception?
+      if (this.goalCurrentTime != undefined) {
+        this.primary.currentTime = this.goalCurrentTime;
+      }
       if (
         this.secondaryLoaded &&
         Math.abs(this.primary.currentTime - this.secondary.currentTime) > 0.05
@@ -112,7 +121,7 @@ export class SyncAV {
     for (
       ;
       attempts <= MAX_RECONCILE_ATTEMPTS;
-      attempts++, await asyncTimeout(50)
+      attempts++, await asyncTimeout(100)
     ) {
       if (attempts == MAX_RECONCILE_ATTEMPTS) {
         console.debug(
@@ -159,8 +168,9 @@ export class SyncAV {
             primary.readyState,
             secondary.readyState
           );
-          // Call load() if readyState still hasn't changed after 4 seconds. Only do this once; if it still gets stuck afterwards, it's most likely a network or server issue.
-          if (++loadAttempts === 80) {
+          // Call load() if readyState still hasn't changed after 2 seconds. Only do this once; if it still gets stuck afterwards, it's most likely a network or server issue.
+          // 2 seconds may sound short, but if we're here, the readyState is at best HAVE_CURRENT_DATA i.e. exactly one frame. This is most likely caused by being stuck and not a network issue. This also happens often, especially while seeking, so if we wait for 3+ seconds every time, it might make for a bad user experience.
+          if (++loadAttempts === 20) {
             console.debug(
               "[SyncAV] Waited for readyState to change for",
               loadAttempts,
@@ -194,6 +204,7 @@ export class SyncAV {
       }
     }
     this.reconciliationState = ReconciliationState.IDLE;
+    this.goalCurrentTime = undefined;
   };
 
   constructor() {
@@ -313,10 +324,7 @@ export class SyncAV {
   }
 
   set currentTime(timestamp: number) {
-    if (this.primaryLoaded) {
-      this.primary.currentTime = timestamp;
-    }
-    // This will set this.secondary.currentTime.
+    this.goalCurrentTime = timestamp;
     this.reconcile();
   }
 
