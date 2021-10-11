@@ -119,7 +119,7 @@ export class SyncAV {
           "[SyncAV] Reached maximum reconcile attempts, setting userPaused"
         );
         this.userPaused = true;
-        this.reconciliationState = ReconciliationState.FAILED
+        this.reconciliationState = ReconciliationState.FAILED;
         break;
       }
       if (this.userPaused || this.userSeeking) {
