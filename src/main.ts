@@ -105,6 +105,8 @@ export class SyncAV {
         Math.abs(this.goalCurrentTime - this.primary.currentTime) > 0.05
       ) {
         this.primary.currentTime = this.goalCurrentTime;
+        // If we don't clear, we'll play() and then the currentTime will have changed, causing an infinite loop.
+        this.goalCurrentTime = undefined;
       }
       if (
         this.secondaryLoaded &&
