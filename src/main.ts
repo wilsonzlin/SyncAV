@@ -7,11 +7,18 @@ type EventName =
   | "error"
   | "loadedmetadata"
   | "playbackchange"
+  | "reconciliationstatechange"
   | "seekchange"
   | "timeupdate"
   | "volumechange";
 
 const MAX_RECONCILE_ATTEMPTS = 20 * 120;
+
+export enum ReconciliationState {
+  IDLE,
+  RUNNING,
+  FAILED,
+}
 
 // This implementation is prone to infinite loops, due to the fact that we don't have full control: the system, browser, and user can do things that we can only react to. To prevent, ensure there are no tug-of-wars:
 // - Feel free to pause whenever and without checking, but don't play without checking state.
@@ -29,7 +36,7 @@ export class SyncAV {
   private _userPaused = true;
   // We implement this to allow consumer of this class to pause video while seeking without showing paused state, which is a common UI design.
   private userSeeking = false;
-  private reconciling = false;
+  private _reconciliationState = ReconciliationState.IDLE;
   private expectingPrimaryPause = false;
   private expectingSecondaryPause = false;
 
@@ -43,6 +50,16 @@ export class SyncAV {
     if (willChange) this.callEventListeners("playbackchange");
   }
 
+  private get reconciliationState() {
+    return this._reconciliationState;
+  }
+
+  private set reconciliationState(newVal: ReconciliationState) {
+    const willChange = this.reconciliationState !== newVal;
+    this._reconciliationState = newVal;
+    if (willChange) this.callEventListeners("reconciliationstatechange");
+  }
+
   private get primaryLoaded() {
     return !!this.primary.src;
   }
@@ -52,11 +69,11 @@ export class SyncAV {
   }
 
   private reconcile = async () => {
-    if (this.reconciling) {
+    if (this.reconciliationState === ReconciliationState.RUNNING) {
       return;
     }
     console.debug("[SyncAV] Reconciling...");
-    this.reconciling = true;
+    this.reconciliationState = ReconciliationState.RUNNING;
     const { primary, secondary } = this;
     const pauseExpectedly = () => {
       let altered = false;
@@ -91,12 +108,18 @@ export class SyncAV {
       return false;
     };
     let attempts = 0;
-    for (; attempts <= MAX_RECONCILE_ATTEMPTS; await asyncTimeout(50)) {
+    let loadAttempts = 0;
+    for (
+      ;
+      attempts <= MAX_RECONCILE_ATTEMPTS;
+      attempts++, await asyncTimeout(50)
+    ) {
       if (attempts == MAX_RECONCILE_ATTEMPTS) {
         console.debug(
           "[SyncAV] Reached maximum reconcile attempts, setting userPaused"
         );
         this.userPaused = true;
+        this.reconciliationState = ReconciliationState.FAILED
         break;
       }
       if (this.userPaused || this.userSeeking) {
@@ -104,6 +127,7 @@ export class SyncAV {
         if (!pauseExpectedly()) {
           break;
         }
+        loadAttempts = 0;
       } else {
         if (!this.primaryLoaded) {
           // There's nothing loaded; if we proceed, we'll be waiting forever because readyState will never change.
@@ -111,14 +135,17 @@ export class SyncAV {
             "[SyncAV] No primary source loaded, setting userPaused"
           );
           this.userPaused = true;
+          loadAttempts = 0;
           continue;
         }
         if (primary.ended) {
           // We've ended, and we desire to play, so we need to restart (otherwise, we'll wait for readyState forever).
           console.debug("[SyncAV] Primary ended, resetting currentTime");
           primary.currentTime = 0;
+          loadAttempts = 0;
         }
         if (syncCurrentTime()) {
+          loadAttempts = 0;
           continue;
         }
         // WARNING: `preload` must be "auto", as otherwise this could be HAVE_METADATA forever when changing sources.
@@ -132,9 +159,20 @@ export class SyncAV {
             primary.readyState,
             secondary.readyState
           );
+          // Call load() if readyState still hasn't changed after 4 seconds. Only do this once; if it still gets stuck afterwards, it's most likely a network or server issue.
+          if (++loadAttempts === 80) {
+            console.debug(
+              "[SyncAV] Waited for readyState to change for",
+              loadAttempts,
+              "iterations, calling load()..."
+            );
+            primary.load();
+            secondary.load();
+          }
           pauseExpectedly();
           continue;
         }
+        loadAttempts = 0;
         let altered = false;
         if (this.primary.paused) {
           console.debug("[SyncAV] Primary is paused, expectedly playing...");
@@ -155,7 +193,7 @@ export class SyncAV {
         }
       }
     }
-    this.reconciling = false;
+    this.reconciliationState = ReconciliationState.IDLE;
   };
 
   constructor() {
