@@ -14,7 +14,7 @@ type EventName =
 
 // Up to 30 seconds.
 // TODO Is this necessary? Is this fair for slower connections?
-const MAX_RECONCILE_ATTEMPTS = 10 * 30;
+const MAX_RECONCILE_ATTEMPTS = 20 * 30;
 
 export enum ReconciliationState {
   IDLE,
@@ -41,8 +41,6 @@ export class SyncAV {
   private _reconciliationState = ReconciliationState.IDLE;
   private expectingPrimaryPause = false;
   private expectingSecondaryPause = false;
-  // We need this in case a load() is required during reconciliation, which resets the currentTime to zero.
-  private goalCurrentTime: number | undefined;
 
   private get userPaused() {
     return this._userPaused;
@@ -80,15 +78,15 @@ export class SyncAV {
     console.debug("[SyncAV] Reconciling...");
     this.reconciliationState = ReconciliationState.RUNNING;
     const { primary, secondary } = this;
-    const pauseExpectedly = () => {
+    const pauseExpectedly = (pausePrimary = true, pauseSecondary = true) => {
       let altered = false;
-      if (!primary.paused) {
+      if (!primary.paused && pausePrimary) {
         console.debug("[SyncAV] Primary is not paused, expectedly pausing...");
         this.expectingPrimaryPause = true;
         primary.pause();
         altered = true;
       }
-      if (this.secondaryLoaded && !secondary.paused) {
+      if (this.secondaryLoaded && !secondary.paused && pauseSecondary) {
         console.debug(
           "[SyncAV] Secondary is not paused, expectedly pausing..."
         );
@@ -100,14 +98,6 @@ export class SyncAV {
     };
     const syncCurrentTime = () => {
       // TODO Should we check readyState? Is it possible that seeking will throw an exception?
-      if (
-        this.goalCurrentTime != undefined &&
-        Math.abs(this.goalCurrentTime - this.primary.currentTime) > 0.05
-      ) {
-        this.primary.currentTime = this.goalCurrentTime;
-        // If we don't clear, we'll play() and then the currentTime will have changed, causing an infinite loop.
-        this.goalCurrentTime = undefined;
-      }
       if (
         this.secondaryLoaded &&
         Math.abs(this.primary.currentTime - this.secondary.currentTime) > 0.05
@@ -122,11 +112,10 @@ export class SyncAV {
       return false;
     };
     let attempts = 0;
-    let loadAttempts = 0;
     for (
       ;
       attempts <= MAX_RECONCILE_ATTEMPTS;
-      attempts++, await asyncTimeout(100)
+      attempts++, await asyncTimeout(50)
     ) {
       if (attempts == MAX_RECONCILE_ATTEMPTS) {
         console.debug(
@@ -141,7 +130,6 @@ export class SyncAV {
         if (!pauseExpectedly()) {
           break;
         }
-        loadAttempts = 0;
       } else {
         if (!this.primaryLoaded) {
           // There's nothing loaded; if we proceed, we'll be waiting forever because readyState will never change.
@@ -149,45 +137,42 @@ export class SyncAV {
             "[SyncAV] No primary source loaded, setting userPaused"
           );
           this.userPaused = true;
-          loadAttempts = 0;
           continue;
         }
         if (primary.ended) {
           // We've ended, and we desire to play, so we need to restart (otherwise, we'll wait for readyState forever).
           console.debug("[SyncAV] Primary ended, resetting currentTime");
           primary.currentTime = 0;
-          loadAttempts = 0;
         }
         if (syncCurrentTime()) {
-          loadAttempts = 0;
           continue;
         }
-        // WARNING: `preload` must be "auto", as otherwise this could be HAVE_METADATA forever when changing sources.
-        if (
-          primary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA ||
-          (this.secondaryLoaded &&
-            secondary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA)
-        ) {
+        const primaryNotReady =
+          primary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
+        const secondaryNotReady =
+          this.secondaryLoaded &&
+          secondary.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
+        if (primaryNotReady || secondaryNotReady) {
           console.debug(
             "[SyncAV] Not ready:",
             primary.readyState,
             secondary.readyState
           );
-          // Call load() if readyState still hasn't changed after 2 seconds. Only do this once; if it still gets stuck afterwards, it's most likely a network or server issue.
-          // 2 seconds may sound short, but if we're here, the readyState is at best HAVE_CURRENT_DATA i.e. exactly one frame. This is most likely caused by being stuck and not a network issue. This also happens often, especially while seeking, so if we wait for 3+ seconds every time, it might make for a bad user experience.
-          if (++loadAttempts === 20) {
-            console.debug(
-              "[SyncAV] Waited for readyState to change for",
-              loadAttempts,
-              "iterations, calling load()..."
-            );
-            primary.load();
-            secondary.load();
+          // Some browsers refuse to load and stall if the media is paused or has been paused for a while.
+          // Therefore, we play() to kick it into action.
+          // Use a short loop interval to ensure it doesn't play too much; sound might leak and currentTime might drift too much such that we'll need to resync.
+          if (!primaryNotReady) {
+            primary.play();
+          } else {
+            pauseExpectedly(true, false);
           }
-          pauseExpectedly();
+          if (!secondaryNotReady) {
+            secondary.play();
+          } else {
+            pauseExpectedly(false, true);
+          }
           continue;
         }
-        loadAttempts = 0;
         let altered = false;
         if (this.primary.paused) {
           console.debug("[SyncAV] Primary is paused, expectedly playing...");
@@ -209,7 +194,6 @@ export class SyncAV {
       }
     }
     this.reconciliationState = ReconciliationState.IDLE;
-    this.goalCurrentTime = undefined;
   };
 
   constructor() {
@@ -329,7 +313,9 @@ export class SyncAV {
   }
 
   set currentTime(timestamp: number) {
-    this.goalCurrentTime = timestamp;
+    if (this.primaryLoaded) {
+      this.primary.currentTime = timestamp;
+    }
     this.reconcile();
   }
 
