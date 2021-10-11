@@ -100,7 +100,10 @@ export class SyncAV {
     };
     const syncCurrentTime = () => {
       // TODO Should we check readyState? Is it possible that seeking will throw an exception?
-      if (this.goalCurrentTime != undefined) {
+      if (
+        this.goalCurrentTime != undefined &&
+        Math.abs(this.goalCurrentTime - this.primary.currentTime) > 0.05
+      ) {
         this.primary.currentTime = this.goalCurrentTime;
       }
       if (
